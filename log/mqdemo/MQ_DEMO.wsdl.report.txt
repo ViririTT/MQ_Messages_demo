@@ -1,0 +1,14 @@
+
+
+Importing file: C:\Users\timot\IBM\ACET11\myaceworkdir\MQ_DEMO\MQ_DEMO.wsdl
+
+The WSDL import will proceed with bindings MQ_DEMOHttpBinding.
+Creating wsdl schema document for file:///C:/Users/timot/IBM/ACET11/myaceworkdir/MQ_DEMO/MQ_DEMO.wsdl.
+Parsing wsdl binding {http://MQ_DEMO}MQ_DEMOHttpBinding.
+Parsing wsdl binding input operation1.
+Parsing wsdl binding output operation1.
+Processing doc style for operation operation1.
+Populating WSDL schema MQ_DEMO.xsd.
+Creating file MQ_DEMO.xsd in the workspace.
+Creating file MQ_DEMO_InlineSchema1.xsd in the workspace.
+Copying source WSDL MQ_DEMO.wsdl to MQ_DEMO.wsdl.
