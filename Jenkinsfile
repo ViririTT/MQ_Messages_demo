@@ -8,7 +8,7 @@ pipeline {
   stages {
     stage('Cloning Git') {
       steps {
-        git([url: 'https://github.com/ViririTT/MQ_Messages_demo.git', branch: 'main', credentialsId: 'viririt'])
+        git([url: 'https://github.com/ViririTT/MQ_Messages_demo.git', branch: 'main', credentialsId: 'viriritt'])
         echo "cloning git repo..."
  
       }
