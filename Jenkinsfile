@@ -1,7 +1,7 @@
 pipeline {
   environment {
     imagename = "viririt/acemq-demo"
-    registryCredential = 'viriritt'
+    registryCredential = 'viririt'
     dockerImage = ''
   }
   agent any
