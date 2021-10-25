@@ -19,7 +19,7 @@ FROM ubuntu:trusty
 
 # Place *only* the one common deb and one image deb in the local directory
 # before running docker build
-COPY ibm-datapower-common.deb ibm-datapower-image.deb /tmp/
+COPY ibm-datapower-common.deb  /tmp/
 
 ENV DEBIAN_FRONTEND noninteractive
 
