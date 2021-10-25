@@ -1,53 +1,59 @@
-# Purpose:
-#   Create a Docker image that contains a DataPower Gateway. The resulting
-#   image will have the WebGUI enabled so the license can be accepted.
+# © Copyright IBM Corporation 2015.
 #
-# Usage:
-# 1) Place the DataPower debian packages in the docker build directory
-# 2) Rename the packages ibm-datapower-common.deb and ibm-datapower-image.deb
-#    respectively.
-# 3) Issue the command "docker build ."
-#
-# Notes:
-# After building the DataPower image, run it mapping port 8080. Browse to
-# the mapped port and accept the license.
-#
-# To access the cli, issue the following command:
-# docker run -it <datapower-container> telnet localhost 2200
+# All rights reserved. This program and the accompanying materials
+# are made available under the terms of the Eclipse Public License v1.0
+# which accompanies this distribution, and is available at
+# http://www.eclipse.org/legal/epl-v10.html
 
-FROM ubuntu:trusty
+FROM ubuntu:16.04
 
-# Place *only* the one common deb and one image deb in the local directory
-# before running docker build
+LABEL maintainer "Dan Robinson <dan.robinson@uk.ibm.com>, Sam Rogers <srogers@uk.ibm.com>"
 
+LABEL "ProductID"="447aefb5fd1342d5b893f3934dfded73" \
+      "ProductName"="IBM Integration Bus" \
+      "ProductVersion"="10.0.0.11"
 
-ENV DEBIAN_FRONTEND noninteractive
+# Install curl
+RUN apt-get update && \
+    apt-get install -y curl rsyslog sudo && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install dependencies, enable web-mgmt, prepare for first run.
-# Don't carry the deb packages forward in the image
-RUN echo "Installing dependencies" \
-    && apt-get update \
-    && apt-get -y install \
-          kpartx \
-          schroot \
-          telnet \
-    && echo "Installing DataPower Packages" \
-    && dpkg -i /tmp/ibm-datapower-common.deb /tmp/ibm-datapower-image.deb \
-    && echo "Enabling WebGUI" \
-    && sed -i \
-          -e '/^web-mgmt/,/^exit/s/admin-state.*/admin-state "enabled"/g' \
-          /opt/ibm/datapower/datapower-external.cfg \
-    && echo "Removing intermediate package files" \
-    && rm /tmp/ibm-datapower-common.deb /tmp/ibm-datapower-image.deb \
-    && echo "Preparing to run" \
-    && /opt/ibm/datapower/datapower-docker-build.sh \
-    && mkdir -p /datapower/config /datapower/local \
-    && echo "DataPowerConfigDir=/datapower/config" >> /opt/ibm/datapower/datapower.conf \
-    && echo "DataPowerLocalDir=/datapower/local" >> /opt/ibm/datapower/datapower.conf \
-    && echo "DataPowerCpuCount=4" >> /opt/ibm/datapower/datapower.conf
+# Install IIB V10 Developer edition
+RUN mkdir /opt/ibm && \
+    curl http://public.dhe.ibm.com/ibmdl/export/pub/software/websphere/integration/10.0.0.11-IIB-LINUX64-DEVELOPER.tar.gz \
+    | tar zx --exclude iib-10.0.0.11/tools --directory /opt/ibm && \
+    /opt/ibm/iib-10.0.0.11/iib make registry global accept license silently
+
+# Configure system
+RUN echo "IIB_10:" > /etc/debian_chroot  && \
+    touch /var/log/syslog && \
+    chown syslog:adm /var/log/syslog
 
 
-# EXPOSE the port for the WebGUI.
-EXPOSE 9090
 
-CMD ["/opt/ibm/datapower/datapower-launch"]
+# Create user to run as
+RUN useradd --create-home --home-dir /home/iibuser -G mqbrkrs,sudo iibuser && \
+    sed -e 's/^%sudo	.*/%sudo	ALL=NOPASSWD:ALL/g' -i /etc/sudoers
+
+# Increase security
+RUN sed -i 's/sha512/sha512 minlen=8/'  /etc/pam.d/common-password && \
+    sed -i 's/PASS_MIN_DAYS\t0/PASS_MIN_DAYS\t1/'  /etc/login.defs && \
+    sed -i 's/PASS_MAX_DAYS\t99999/PASS_MAX_DAYS\t90/'  /etc/login.defs
+
+# Copy in script files
+COPY iib_manage.sh /usr/local/bin/
+COPY iib-license-check.sh /usr/local/bin/
+COPY iib_env.sh /usr/local/bin/
+RUN chmod +rx /usr/local/bin/*.sh
+
+# Set BASH_ENV to source mqsiprofile when using docker exec bash -c
+ENV BASH_ENV=/usr/local/bin/iib_env.sh
+ENV MQSI_MQTT_LOCAL_HOSTNAME=127.0.0.1
+
+# Expose default admin port and http port
+EXPOSE 4414 7800
+
+USER iibuser
+
+# Set entrypoint to run management script
+ENTRYPOINT ["iib_manage.sh"]
