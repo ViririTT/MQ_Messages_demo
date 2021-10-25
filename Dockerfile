@@ -1,59 +1,114 @@
-# © Copyright IBM Corporation 2015.
-#
-# All rights reserved. This program and the accompanying materials
-# are made available under the terms of the Eclipse Public License v1.0
-# which accompanies this distribution, and is available at
-# http://www.eclipse.org/legal/epl-v10.html
+ARG BASE_IMAGE=ibmcom/mq:9.1.4.0-r1
 
-FROM ubuntu:16.04
+FROM golang:latest as builder
 
-LABEL maintainer "Dan Robinson <dan.robinson@uk.ibm.com>, Sam Rogers <srogers@uk.ibm.com>"
+WORKDIR /go/src/github.com/ot4i/ace-docker/
+ARG IMAGE_REVISION="Not specified"
+ARG IMAGE_SOURCE="Not specified"
 
-LABEL "ProductID"="447aefb5fd1342d5b893f3934dfded73" \
-      "ProductName"="IBM Integration Bus" \
-      "ProductVersion"="10.0.0.11"
+COPY go.mod . 
+COPY go.sum .
+RUN go mod download
 
-# Install curl
-RUN apt-get update && \
-    apt-get install -y curl rsyslog sudo && \
-    rm -rf /var/lib/apt/lists/*
+COPY cmd/ ./cmd
+COPY internal/ ./internal
+COPY common/ ./common
+RUN go build -ldflags "-X \"main.ImageCreated=$(date --iso-8601=seconds)\" -X \"main.ImageRevision=$IMAGE_REVISION\" -X \"main.ImageSource=$IMAGE_SOURCE\"" ./cmd/runaceserver/
+RUN go build ./cmd/chkaceready/
+RUN go build ./cmd/chkacehealthy/
+# Run all unit tests
+RUN go test -v ./cmd/runaceserver/
+RUN go test -v ./internal/...
+RUN go test -v ./common/...
+RUN go vet ./cmd/... ./internal/... ./common/...
 
-# Install IIB V10 Developer edition
-RUN mkdir /opt/ibm && \
-    curl http://public.dhe.ibm.com/ibmdl/export/pub/software/websphere/integration/10.0.0.11-IIB-LINUX64-DEVELOPER.tar.gz \
-    | tar zx --exclude iib-10.0.0.11/tools --directory /opt/ibm && \
-    /opt/ibm/iib-10.0.0.11/iib make registry global accept license silently
+ARG ACE_INSTALL=ace-11.0.0.8.tar.gz
+WORKDIR /opt/ibm
+COPY deps/$ACE_INSTALL .
+RUN mkdir ace-11
+RUN tar xzf $ACE_INSTALL --absolute-names --exclude ace-11.\*/tools --strip-components 1 --directory /opt/ibm/ace-11
 
-# Configure system
-RUN echo "IIB_10:" > /etc/debian_chroot  && \
-    touch /var/log/syslog && \
-    chown syslog:adm /var/log/syslog
+FROM $BASE_IMAGE
 
+ENV SUMMARY="Integration Server for App Connect Enterprise" \
+    DESCRIPTION="Integration Server for App Connect Enterprise" \
+    PRODNAME="AppConnectEnterprise" \
+    COMPNAME="IntegrationServer"
 
+LABEL summary="$SUMMARY" \
+      description="$DESCRIPTION" \
+      io.k8s.description="$DESCRIPTION" \
+      io.k8s.display-name="Integration Server for App Connect Enterprise" \
+      io.openshift.tags="$PRODNAME,$COMPNAME" \
+      com.redhat.component="$PRODNAME-$COMPNAME" \
+      name="$PRODNAME/$COMPNAME" \
+      vendor="IBM" \
+      version="11.0.0.8" \
+      release="1" \
+      license="IBM" \
+      maintainer="Hybrid Integration Platform Cloud" \
+      io.openshift.expose-services="" \
+      usage=""
 
-# Create user to run as
-RUN useradd --create-home --home-dir /home/iibuser -G mqbrkrs,sudo iibuser && \
-    sed -e 's/^%sudo	.*/%sudo	ALL=NOPASSWD:ALL/g' -i /etc/sudoers
+USER root
 
-# Increase security
-RUN sed -i 's/sha512/sha512 minlen=8/'  /etc/pam.d/common-password && \
-    sed -i 's/PASS_MIN_DAYS\t0/PASS_MIN_DAYS\t1/'  /etc/login.defs && \
-    sed -i 's/PASS_MAX_DAYS\t99999/PASS_MAX_DAYS\t90/'  /etc/login.defs
+# Add required license as text file in Liceses directory (GPL, MIT, APACHE, Partner End User Agreement, etc)
+COPY /licenses/ /licenses/
+COPY LICENSE /licenses/licensing.txt
+
+# Create OpenTracing directories, and copy in any library or configuration files available
+RUN mkdir /etc/ACEOpenTracing /opt/ACEOpenTracing /var/log/ACEOpenTracing
+COPY deps/OpenTracing/library/* ./opt/ACEOpenTracing/
+COPY deps/OpenTracing/config/* ./etc/ACEOpenTracing/
+
+WORKDIR /opt/ibm
+
+RUN microdnf update && microdnf install util-linux unzip python2 && microdnf clean all
+COPY --from=builder /opt/ibm/ace-11 /opt/ibm/ace-11
+RUN /opt/ibm/ace-11/ace make registry global accept license silently
+
+# Copy in PID1 process
+COPY --from=builder /go/src/github.com/ot4i/ace-docker/runaceserver /usr/local/bin/
+COPY --from=builder /go/src/github.com/ot4i/ace-docker/chkace* /usr/local/bin/
 
 # Copy in script files
-COPY iib_manage.sh /usr/local/bin/
-COPY iib-license-check.sh /usr/local/bin/
-COPY iib_env.sh /usr/local/bin/
-RUN chmod +rx /usr/local/bin/*.sh
+COPY *.sh /usr/local/bin/
+
+# Install kubernetes cli
+COPY ubi/install-kubectl.sh /usr/local/bin/
+RUN chmod u+x /usr/local/bin/install-kubectl.sh \
+  && install-kubectl.sh
+
+# Create the ace workdir for user mqm, and chmod script files
+RUN mkdir /home/aceuser \
+  && chown mqm:mqm /home/aceuser \
+  && usermod -a -G mqbrkrs mqm \
+  && usermod -d /home/aceuser mqm \
+  && su - mqm -c '. /opt/ibm/ace-11/server/bin/mqsiprofile && mqsicreateworkdir /home/aceuser/ace-server' \
+  && chmod 755 /usr/local/bin/*
 
 # Set BASH_ENV to source mqsiprofile when using docker exec bash -c
-ENV BASH_ENV=/usr/local/bin/iib_env.sh
-ENV MQSI_MQTT_LOCAL_HOSTNAME=127.0.0.1
+ENV BASH_ENV=/usr/local/bin/ace_env.sh
 
-# Expose default admin port and http port
-EXPOSE 4414 7800
+# Expose ports.  7600, 7800, 7843 for ACE; 1414 for MQ; 9157 for MQ metrics; 9483 for ACE metrics;
+EXPOSE 7600 7800 7843 1414 9157 9483
 
-USER iibuser
+# Set permissions for OpenTracing directories
+RUN chown mqm:mqm /etc/ACEOpenTracing /opt/ACEOpenTracing /var/log/ACEOpenTracing
+
+USER mqm
+
+WORKDIR /home/aceuser
+RUN mkdir /home/aceuser/initial-config && chown mqm:mqm /home/aceuser/initial-config
+
+RUN mkdir /home/aceuser/temp
+RUN mkdir /home/aceuser/temp/gen
+COPY ubi/generic_invalid/invalid_license.msgflow /home/aceuser/temp/gen
+COPY ubi/generic_invalid/InvalidLicenseJava.jar /home/aceuser/temp/gen
+COPY ubi/generic_invalid/application.descriptor /home/aceuser/temp
+RUN chmod -R 777 /home/aceuser/temp
+
+ENV USE_QMGR=true LOG_FORMAT=basic
 
 # Set entrypoint to run management script
-ENTRYPOINT ["iib_manage.sh"]
+ENTRYPOINT ["runaceserver"]
