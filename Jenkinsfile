@@ -1,6 +1,6 @@
 pipeline {
   environment {
-    imagename = "viriritt/docker-jenkins"
+    imagename = "viriritt/acemq-demo"
     registryCredential = 'viriritt'
     dockerImage = ''
   }
@@ -8,7 +8,7 @@ pipeline {
   stages {
     stage('Cloning Git') {
       steps {
-        git([url: 'https://github.com/ViririTT/CustomerIS.git', branch: 'main', credentialsId: 'viririt'])
+        git([url: 'https://github.com/ViririTT/MQ_Messages_demo.git', branch: 'main', credentialsId: 'viririt'])
         echo "cloning git repo..."
  
       }
